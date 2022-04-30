@@ -45,11 +45,7 @@ def main_route():
 @app.route('/products', methods=['GET', 'POST', 'PUT'])
 def products_route():
     if request.method == 'GET':
-        products = Product.query.order_by(Product.id).all()
-
-        authorization = request.headers.get('Authorization')
-        if authorization is None:
-            products = Product.query.filter(Product.stockCount > 0).order_by(Product.id).all()
+        products = Product.query.filter(Product.stockCount > 0).order_by(Product.id).all()
 
         # ProductJsonSchema - схема преобразования модели в JSON, в качестве
         # параметра передано many=True для обработки нескольких данных
@@ -63,19 +59,22 @@ def products_route():
         return jsonify({"products": result})
 
     if request.method == 'POST':
+        # проверка заголовка запроса, в котором должен быть токен для доступа
         authorization = request.headers.get('Authorization')
         if authorization is None:
             return jsonify({"message": "no token", "code": "401"})
-
+        # получаем объект токена из базы, чтобы получить идентификатор пользователя
         token: Token = Token.query.filter(Token.token == authorization[7:]).first()
         if token is None:
+            # если токена нет
             return jsonify({"message": "no token", "code": "401"})
-
+        # получаем самого пользователя, чей тоекн
         user: User = User.query.filter(User.id == token.user_id).first()
 
         if not user.admin:
+            # создание товара только для администратора
             return jsonify({"message": "permission denied", "code": "403"})
-
+        # получаем все данные из формы
         name = request.form.get('name')
         price = request.form.get('price')
         stockCount = request.form.get('stockCount')
@@ -84,16 +83,21 @@ def products_route():
         filename = None
 
         if file:
+            # если в форме есть фотка, то сохраняем ее в статическую папку фотографий
+            # и название заносим в базу
             filename = secure_filename(str(datetime.now()) + '-' + file.filename)
             file.save(
                 os.path.join(app.root_path, 'static_folder/' + app.config['images'],
                              filename))
-
+        # создаем объект продукта
         product: Product = Product(name, price, stockCount, publisher, filename)
+        # добавляем в открытую сессию базы
         db.session.add(product)
+        # сохраняем сессию
         db.session.commit()
         return jsonify({"message": "success"})
 
+    # метод для администратора, чтобы добавлять количество товара на складе
     if request.method == 'PUT':
         authorization = request.headers.get('Authorization')
         if authorization is None:
@@ -104,11 +108,13 @@ def products_route():
             return jsonify({"message": "no token", "code": "401"})
 
         data = request.get_json()
+        # получаем продукт по идентификатору
         product: Product = Product.query.filter(Product.id == data['product_id']).first()
 
         if product is None:
             return jsonify({"message": "error", "code": "403"})
 
+        # изменяем данные и сохраняем базу
         product.stockCount += 1
         db.session.commit()
 
@@ -117,11 +123,13 @@ def products_route():
 
 @app.route('/image/<filename>', methods=['GET'])
 def get_image(filename):
+    # получение адрес на сервере к картинке по переданному имени файла
     return str(url_for('static', filename=app.config['images'] + filename))
 
 
 @app.route('/image', methods=['POST'])
 def set_image():
+    # изменение фотографии у продукта
     if request.method == 'POST':
         product_id = request.form.get("product_id")
         file = request.files.get("product_image", '')
@@ -140,6 +148,7 @@ def set_image():
         return "success"
 
 
+# получение информации об одном товаре
 @app.route('/product/<product_id>', methods=['GET'])
 def product_route(product_id):
     if request.method == 'GET':
@@ -181,6 +190,7 @@ def login_route():
         return jsonify({"message": "success", "token": generated_token}), 200
 
 
+# End-point для выхода из аккаунта
 @app.route('/logout', methods=['GET'])
 def logout_route():
     if request.method == 'GET':
@@ -345,6 +355,7 @@ def cart_route():
 
 @app.route('/profile', methods=['GET', 'POST'])
 def profile_route():
+    # получение сведений о профиле и своих заказах
     if request.method == 'GET':
         authorization = request.headers.get('Authorization')
         if authorization is None:
@@ -361,6 +372,7 @@ def profile_route():
         del result_user['id']
         del result_user['password']
 
+        # order_by это функция ORM для сортировки записей по переданному полю
         query_orders: Order = Order.query.filter(Order.user_id == token.user_id)\
             .order_by(Order.id)\
             .all()
@@ -371,6 +383,8 @@ def profile_route():
 
         result = []
         for order in orders:
+            # ORM не подходит для таких сложных запросов, поэтому проще самому писать
+            # sql запросы и выполнять их через базу
             query = db.session.execute(
                 'select p.id, p.name as "product_name", '
                 'p.product_image, op.count as "product_count", p.price as "product_price" '
@@ -382,6 +396,7 @@ def profile_route():
 
         return jsonify({"profile": result_user, "orders": result})
 
+    # измнение своего профиля
     if request.method == 'POST':
         authorization = request.headers.get('Authorization')
         if authorization is None:
@@ -408,6 +423,7 @@ def profile_route():
         return jsonify({"message": "success"})
 
 
+# End-point для поиска
 @app.route('/search', methods=['POST'])
 def search_product():
     if request.method == 'POST':
@@ -416,10 +432,13 @@ def search_product():
         if body is None:
             return jsonify({"message": "Body is null", "code": "403"})
 
-        # данные из формы
+        # получаем слово поиска
         tag = body['tag']
 
+        # формируем строку для поиска
         search = "%{}%".format(tag)
+        # поиск всех продуктов, которые подходят по наименованию под переданные текст,
+        # вне зависимости от регистра
         products = Product.query.filter(Product.name.ilike(search)).all()
         productSchema = ProductJsonSchema(many=True)
 
@@ -431,6 +450,7 @@ def search_product():
         return jsonify({"products": result})
 
 
+# End-point для получения заказов админу
 @app.route('/admin/orders', methods=['GET'])
 def admin_orders_route():
     if request.method == 'GET':
@@ -442,6 +462,7 @@ def admin_orders_route():
         orders = orderJson.dump(query_orders)
 
         result = []
+        # также собственный сложный для ORM sql запрос
         for order in orders:
             query = db.session.execute(
                 'select p.id, p.name as "product_name", '
